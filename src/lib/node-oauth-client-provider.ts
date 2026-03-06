@@ -7,7 +7,7 @@ import {
   OAuthTokensSchema,
 } from '@modelcontextprotocol/sdk/shared/auth.js'
 import type { OAuthProviderOptions, StaticOAuthClientMetadata } from './types'
-import { readJsonFile, writeJsonFile, readTextFile, writeTextFile, deleteConfigFile } from './mcp-auth-config'
+import { readJsonFile, writeJsonFile, readTextFileOptional, writeTextFile, deleteConfigFile } from './mcp-auth-config'
 import { StaticOAuthClientInformationFull } from './types'
 import { log, debugLog, MCP_REMOTE_VERSION } from './utils'
 import { sanitizeUrl } from 'strict-url-sanitise'
@@ -191,29 +191,32 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
    */
   async tokens(): Promise<OAuthTokens | undefined> {
     debugLog('Reading OAuth tokens')
-    debugLog('Token request stack trace:', new Error().stack)
 
     const tokens = await readJsonFile<OAuthTokens>(this.serverUrlHash, 'tokens.json', OAuthTokensSchema)
 
     if (tokens) {
-      const timeLeft = tokens.expires_in || 0
+      // Compute actual remaining time using the saved timestamp
+      const savedAtStr = await readTextFileOptional(this.serverUrlHash, 'tokens_saved_at.txt')
+      const savedAt = savedAtStr ? parseInt(savedAtStr, 10) : 0
 
-      // Alert if expires_in is invalid
-      if (typeof tokens.expires_in !== 'number' || tokens.expires_in < 0) {
-        debugLog('⚠️ WARNING: Invalid expires_in detected while reading tokens ⚠️', {
-          expiresIn: tokens.expires_in,
-          tokenObject: JSON.stringify(tokens),
-          stack: new Error('Invalid expires_in value').stack,
+      if (Number.isFinite(savedAt) && savedAt > 0 && typeof tokens.expires_in === 'number') {
+        const elapsedSeconds = Math.floor((Date.now() - savedAt) / 1000)
+        // Cap at original expires_in to guard against negative elapsed (clock skew)
+        const actualTimeLeft = Math.min(tokens.expires_in - elapsedSeconds, tokens.expires_in)
+        debugLog('Token expiry calculation:', {
+          originalExpiresIn: tokens.expires_in,
+          elapsedSeconds,
+          actualTimeLeft,
         })
+        tokens.expires_in = Math.max(actualTimeLeft, 0)
       }
 
       debugLog('Token result:', {
         found: true,
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
-        expiresIn: `${timeLeft} seconds`,
-        isExpired: timeLeft <= 0,
-        expiresInValue: tokens.expires_in,
+        expiresIn: `${tokens.expires_in} seconds`,
+        isExpired: (tokens.expires_in || 0) <= 0,
       })
     } else {
       debugLog('Token result: Not found')
@@ -227,25 +230,17 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
    * @param tokens The tokens to save
    */
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    const timeLeft = tokens.expires_in || 0
-
-    // Alert if expires_in is invalid
-    if (typeof tokens.expires_in !== 'number' || tokens.expires_in < 0) {
-      debugLog('⚠️ WARNING: Invalid expires_in detected in tokens ⚠️', {
-        expiresIn: tokens.expires_in,
-        tokenObject: JSON.stringify(tokens),
-        stack: new Error('Invalid expires_in value').stack,
-      })
-    }
-
     debugLog('Saving tokens', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
-      expiresIn: `${timeLeft} seconds`,
-      expiresInValue: tokens.expires_in,
+      expiresIn: `${tokens.expires_in} seconds`,
     })
 
+    // Write sequentially: tokens first, then timestamp.
+    // If the process crashes between the two, a missing timestamp
+    // falls back to the savedAt > 0 guard (no false expiry calculation).
     await writeJsonFile(this.serverUrlHash, 'tokens.json', tokens)
+    await writeTextFile(this.serverUrlHash, 'tokens_saved_at.txt', String(Date.now()))
   }
 
   /**
@@ -311,6 +306,7 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
         await Promise.all([
           deleteConfigFile(this.serverUrlHash, 'client_info.json'),
           deleteConfigFile(this.serverUrlHash, 'tokens.json'),
+          deleteConfigFile(this.serverUrlHash, 'tokens_saved_at.txt'),
           deleteConfigFile(this.serverUrlHash, 'code_verifier.txt'),
         ])
         this._clientInfo = undefined
@@ -324,7 +320,10 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
         break
 
       case 'tokens':
-        await deleteConfigFile(this.serverUrlHash, 'tokens.json')
+        await Promise.all([
+          deleteConfigFile(this.serverUrlHash, 'tokens.json'),
+          deleteConfigFile(this.serverUrlHash, 'tokens_saved_at.txt'),
+        ])
         debugLog('OAuth tokens invalidated')
         break
 
