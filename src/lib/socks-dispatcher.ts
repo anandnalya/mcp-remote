@@ -91,7 +91,8 @@ export function createSocksDispatcher(proxyUrl: string): Agent {
       // For socks5/socks4 (proxyDns=false), resolve DNS locally before connecting.
       // For socks5h/socks4a (proxyDns=true), pass hostname as-is so the proxy resolves DNS.
       const getDestination = async (): Promise<{ host: string; port: number }> => {
-        const destPort = parseInt(String(port), 10)
+        // undici passes port as "" (empty string) when the URL uses the default port
+        const destPort = port ? parseInt(String(port), 10) : protocol === 'https:' ? 443 : 80
         if (config.proxyDns || net.isIP(bareHostname)) {
           // Proxy resolves DNS, or it's already an IP — pass unbracketed
           return { host: bareHostname, port: destPort }
