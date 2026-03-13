@@ -189,6 +189,24 @@ export async function readTextFile(serverUrlHash: string, filename: string, erro
 }
 
 /**
+ * Reads a text file, returning undefined if it doesn't exist.
+ * Only suppresses ENOENT; other I/O errors are logged and re-thrown.
+ */
+export async function readTextFileOptional(serverUrlHash: string, filename: string): Promise<string | undefined> {
+  try {
+    await ensureConfigDir()
+    const filePath = getConfigFilePath(serverUrlHash, filename)
+    return await fs.readFile(filePath, 'utf-8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    log(`Error reading ${filename}:`, error)
+    throw error
+  }
+}
+
+/**
  * Writes a text string to a file
  * @param serverUrlHash The hash of the server URL
  * @param filename The name of the file to write
