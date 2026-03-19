@@ -195,16 +195,17 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
     const tokens = await readJsonFile<OAuthTokens>(this.serverUrlHash, 'tokens.json', OAuthTokensSchema)
 
     if (tokens) {
-      // Compute actual remaining time using the saved timestamp
-      let savedAtStr: string | undefined
-      try {
-        savedAtStr = await readTextFileOptional(this.serverUrlHash, 'tokens_saved_at.txt')
-      } catch {
-        // Timestamp file is auxiliary; don't block token retrieval
-      }
-      const savedAt = savedAtStr ? parseInt(savedAtStr, 10) : 0
+      // Only read the timestamp file when there's an expires_in to recompute
+      if (typeof tokens.expires_in === 'number') {
+        let savedAtStr: string | undefined
+        try {
+          savedAtStr = await readTextFileOptional(this.serverUrlHash, 'tokens_saved_at.txt')
+        } catch {
+          // Timestamp file is auxiliary; don't block token retrieval
+        }
+        const savedAt = savedAtStr ? parseInt(savedAtStr, 10) : 0
 
-      if (Number.isFinite(savedAt) && savedAt > 0 && typeof tokens.expires_in === 'number') {
+        if (Number.isFinite(savedAt) && savedAt > 0) {
         const elapsedSeconds = Math.floor((Date.now() - savedAt) / 1000)
         // Cap at original expires_in to guard against negative elapsed (clock skew)
         const actualTimeLeft = Math.min(tokens.expires_in - elapsedSeconds, tokens.expires_in)
@@ -214,6 +215,7 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
           actualTimeLeft,
         })
         tokens.expires_in = Math.max(actualTimeLeft, 0)
+        }
       }
 
       debugLog('Token result:', {
@@ -238,7 +240,7 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
     debugLog('Saving tokens', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
-      expiresIn: `${tokens.expires_in} seconds`,
+      expiresIn: tokens.expires_in != null ? `${tokens.expires_in} seconds` : 'unknown',
     })
 
     // Write sequentially: tokens first, then timestamp.

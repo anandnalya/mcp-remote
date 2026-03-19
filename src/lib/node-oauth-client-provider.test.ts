@@ -374,7 +374,7 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
       expect(tokens!.expires_in).toBe(3600)
     })
 
-    it('should not modify tokens when expires_in is undefined and timestamp is missing', async () => {
+    it('should not read timestamp file when expires_in is undefined', async () => {
       provider = new NodeOAuthClientProvider(defaultOptions)
 
       mockReadJsonFile.mockResolvedValueOnce({
@@ -382,12 +382,12 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
         token_type: 'bearer',
         refresh_token: 'test-refresh-token',
       })
-      mockReadTextFileOptional.mockResolvedValueOnce(undefined)
 
       const tokens = await provider.tokens()
 
       expect(tokens).toBeDefined()
       expect(tokens!.expires_in).toBeUndefined()
+      expect(mockReadTextFileOptional).not.toHaveBeenCalled()
     })
 
     it('should write both tokens.json and tokens_saved_at.txt on save', async () => {
