@@ -242,8 +242,10 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
     })
 
     // Write sequentially: tokens first, then timestamp.
-    // If the process crashes between the two, a missing timestamp
-    // falls back to the savedAt > 0 guard (no false expiry calculation).
+    // If the process crashes between the two, the missing/corrupt timestamp
+    // causes tokens() to skip expiry recomputation and return the original
+    // expires_in. This is a fail-open tradeoff: the token may appear valid
+    // longer than it should, but the SDK will get a 401 and trigger a refresh.
     await writeJsonFile(this.serverUrlHash, 'tokens.json', tokens)
     await writeTextFile(this.serverUrlHash, 'tokens_saved_at.txt', String(Date.now()))
   }

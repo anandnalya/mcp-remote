@@ -442,5 +442,56 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
       expect(tokens).toBeDefined()
       expect(tokens!.expires_in).toBe(3600)
     })
+
+    it('should preserve original expires_in when timestamp file contains empty string', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce('')
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
+
+    it('should preserve original expires_in when timestamp file contains non-numeric content', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce('not-a-number')
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
+
+    it('should preserve original expires_in when readTextFileOptional throws', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockRejectedValueOnce(new Error('permission denied'))
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
   })
 })
