@@ -196,7 +196,12 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
 
     if (tokens) {
       // Compute actual remaining time using the saved timestamp
-      const savedAtStr = await readTextFileOptional(this.serverUrlHash, 'tokens_saved_at.txt')
+      let savedAtStr: string | undefined
+      try {
+        savedAtStr = await readTextFileOptional(this.serverUrlHash, 'tokens_saved_at.txt')
+      } catch {
+        // Timestamp file is auxiliary; don't block token retrieval
+      }
       const savedAt = savedAtStr ? parseInt(savedAtStr, 10) : 0
 
       if (Number.isFinite(savedAt) && savedAt > 0 && typeof tokens.expires_in === 'number') {

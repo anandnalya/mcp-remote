@@ -310,9 +310,20 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
   })
 
   describe('token expiry tracking', () => {
+    const NOW = 1_700_000_000_000
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     it('should compute remaining TTL by subtracting elapsed time', async () => {
       provider = new NodeOAuthClientProvider(defaultOptions)
-      const savedAt = Date.now() - 600_000 // 600 seconds ago
+      const savedAt = NOW - 600_000 // 600 seconds ago
 
       mockReadJsonFile.mockResolvedValueOnce({
         access_token: 'test-access-token',
@@ -325,12 +336,12 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
       const tokens = await provider.tokens()
 
       expect(tokens).toBeDefined()
-      expect(tokens!.expires_in).toBeCloseTo(3000, -1)
+      expect(tokens!.expires_in).toBe(3000)
     })
 
     it('should clamp expires_in to 0 when token is fully expired', async () => {
       provider = new NodeOAuthClientProvider(defaultOptions)
-      const savedAt = Date.now() - 7_200_000 // 2 hours ago
+      const savedAt = NOW - 7_200_000 // 2 hours ago
 
       mockReadJsonFile.mockResolvedValueOnce({
         access_token: 'test-access-token',
@@ -391,7 +402,7 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
       await provider.saveTokens(tokensToSave)
 
       expect(mockWriteJsonFile).toHaveBeenCalledWith('test-hash', 'tokens.json', tokensToSave)
-      expect(mockWriteTextFile).toHaveBeenCalledWith('test-hash', 'tokens_saved_at.txt', expect.stringMatching(/^\d+$/))
+      expect(mockWriteTextFile).toHaveBeenCalledWith('test-hash', 'tokens_saved_at.txt', String(NOW))
     })
 
     it('should delete tokens_saved_at.txt when invalidating tokens', async () => {
@@ -416,7 +427,7 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
 
     it('should cap remaining time at original expires_in when clock skew causes negative elapsed', async () => {
       provider = new NodeOAuthClientProvider(defaultOptions)
-      const savedAt = Date.now() + 60_000 // savedAt in the future (clock skew)
+      const savedAt = NOW + 60_000 // savedAt in the future (clock skew)
 
       mockReadJsonFile.mockResolvedValueOnce({
         access_token: 'test-access-token',

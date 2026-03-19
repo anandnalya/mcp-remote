@@ -17,6 +17,8 @@ import { log, MCP_REMOTE_VERSION } from './utils'
  *   - Format: OAuthClientInformation object with client_id and other registration details
  * - {server_hash}_tokens.json: Contains OAuth access and refresh tokens
  *   - Format: OAuthTokens object with access_token, refresh_token, and expiration information
+ * - {server_hash}_tokens_saved_at.txt: Timestamp (ms since epoch) when tokens were persisted
+ *   - Used to recompute remaining expires_in across process restarts
  * - {server_hash}_code_verifier.txt: Contains the PKCE code verifier for the current OAuth flow
  *   - Format: Plain text string used for PKCE verification
  *
