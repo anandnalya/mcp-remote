@@ -203,18 +203,18 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
         } catch {
           // Timestamp file is auxiliary; don't block token retrieval
         }
-        const savedAt = savedAtStr ? parseInt(savedAtStr, 10) : 0
+        const savedAt = savedAtStr ? Number(savedAtStr.trim()) : 0
 
-        if (Number.isFinite(savedAt) && savedAt > 0) {
-        const elapsedSeconds = Math.floor((Date.now() - savedAt) / 1000)
-        // Cap at original expires_in to guard against negative elapsed (clock skew)
-        const actualTimeLeft = Math.min(tokens.expires_in - elapsedSeconds, tokens.expires_in)
-        debugLog('Token expiry calculation:', {
-          originalExpiresIn: tokens.expires_in,
-          elapsedSeconds,
-          actualTimeLeft,
-        })
-        tokens.expires_in = Math.max(actualTimeLeft, 0)
+        if (Number.isSafeInteger(savedAt) && savedAt > 0) {
+          const elapsedSeconds = Math.floor((Date.now() - savedAt) / 1000)
+          // Cap at original expires_in to guard against negative elapsed (clock skew)
+          const actualTimeLeft = Math.min(tokens.expires_in - elapsedSeconds, tokens.expires_in)
+          debugLog('Token expiry calculation:', {
+            originalExpiresIn: tokens.expires_in,
+            elapsedSeconds,
+            actualTimeLeft,
+          })
+          tokens.expires_in = Math.max(actualTimeLeft, 0)
         }
       }
 
