@@ -192,7 +192,7 @@ export async function readTextFile(serverUrlHash: string, filename: string, erro
 
 /**
  * Reads a text file, returning undefined if it doesn't exist.
- * Only suppresses ENOENT; other I/O errors are logged and re-thrown.
+ * Only suppresses ENOENT; other I/O errors are logged in debug mode and re-thrown.
  */
 export async function readTextFileOptional(serverUrlHash: string, filename: string): Promise<string | undefined> {
   try {
