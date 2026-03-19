@@ -1,7 +1,7 @@
 import path from 'path'
 import os from 'os'
 import fs from 'fs/promises'
-import { log, MCP_REMOTE_VERSION } from './utils'
+import { log, debugLog, MCP_REMOTE_VERSION } from './utils'
 
 /**
  * MCP Remote Authentication Configuration
@@ -203,7 +203,7 @@ export async function readTextFileOptional(serverUrlHash: string, filename: stri
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined
     }
-    log(`Error reading ${filename}:`, error)
+    debugLog(`Error reading optional file ${filename}:`, error)
     throw error
   }
 }

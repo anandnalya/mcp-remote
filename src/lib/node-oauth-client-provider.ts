@@ -220,7 +220,7 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
         found: true,
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
-        expiresIn: `${tokens.expires_in} seconds`,
+        expiresIn: tokens.expires_in != null ? `${tokens.expires_in} seconds` : 'unknown',
         isExpired: (tokens.expires_in || 0) <= 0,
       })
     } else {
@@ -245,7 +245,8 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
     // If the process crashes between the two, the missing/corrupt timestamp
     // causes tokens() to skip expiry recomputation and return the original
     // expires_in. This is a fail-open tradeoff: the token may appear valid
-    // longer than it should, but the SDK will get a 401 and trigger a refresh.
+    // longer than it should, but the server will reject it and the client
+    // will re-initiate the auth flow.
     await writeJsonFile(this.serverUrlHash, 'tokens.json', tokens)
     await writeTextFile(this.serverUrlHash, 'tokens_saved_at.txt', String(Date.now()))
   }
