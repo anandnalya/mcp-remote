@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { parseCommandLineArgs, shouldIncludeTool, mcpProxy, setupOAuthCallbackServerWithLongPoll, getServerUrlHash } from './utils'
+import {
+  parseCommandLineArgs,
+  shouldIncludeTool,
+  mcpProxy,
+  setupOAuthCallbackServerWithLongPoll,
+  getServerUrlHash,
+  redactSensitiveHeaders,
+} from './utils'
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { EventEmitter } from 'events'
 import express from 'express'
@@ -1152,5 +1159,79 @@ describe('Feature: Server URL Hash Generation', () => {
     const hash1 = getServerUrlHash('https://example.com', '')
     const hash2 = getServerUrlHash('https://example.com')
     expect(hash1).toBe(hash2)
+  })
+})
+
+describe('Feature: Redact Sensitive Headers', () => {
+  it('Scenario: Redact Authorization header value', () => {
+    const redacted = redactSensitiveHeaders({ Authorization: 'Basic dXNlcjpwYXNz' })
+    expect(redacted).toEqual({ Authorization: '[REDACTED]' })
+  })
+
+  it('Scenario: Redact case-insensitively', () => {
+    const redacted = redactSensitiveHeaders({
+      authorization: 'Bearer abc',
+      COOKIE: 'session=xyz',
+      'Proxy-Authorization': 'Basic foo',
+    })
+    expect(redacted).toEqual({
+      authorization: '[REDACTED]',
+      COOKIE: '[REDACTED]',
+      'Proxy-Authorization': '[REDACTED]',
+    })
+  })
+
+  it('Scenario: Redact non-standard authorization variants', () => {
+    const redacted = redactSensitiveHeaders({
+      'X-Authorization': 'Basic abc',
+      'X-Auth': 'token',
+      'X-Credentials': 'c',
+      'Set-Cookie': 's=1',
+    })
+    expect(redacted).toEqual({
+      'X-Authorization': '[REDACTED]',
+      'X-Auth': '[REDACTED]',
+      'X-Credentials': '[REDACTED]',
+      'Set-Cookie': '[REDACTED]',
+    })
+  })
+
+  it('Scenario: Redact common credential-bearing header names', () => {
+    const redacted = redactSensitiveHeaders({
+      'X-Api-Key': 'k1',
+      'X-API_KEY': 'k2',
+      'X-Auth-Token': 't1',
+      'X-Session-Secret': 's1',
+      'X-User-Password': 'p1',
+    })
+    expect(redacted).toEqual({
+      'X-Api-Key': '[REDACTED]',
+      'X-API_KEY': '[REDACTED]',
+      'X-Auth-Token': '[REDACTED]',
+      'X-Session-Secret': '[REDACTED]',
+      'X-User-Password': '[REDACTED]',
+    })
+  })
+
+  it('Scenario: Preserve non-sensitive header values', () => {
+    const redacted = redactSensitiveHeaders({
+      Authorization: 'Basic dXNlcjpwYXNz',
+      'X-Trino-Client-Tags': 'claude',
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    })
+    expect(redacted).toEqual({
+      Authorization: '[REDACTED]',
+      'X-Trino-Client-Tags': 'claude',
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    })
+  })
+
+  it('Scenario: Return a new object without mutating input', () => {
+    const input = { Authorization: 'Basic abc' }
+    const redacted = redactSensitiveHeaders(input)
+    expect(input).toEqual({ Authorization: 'Basic abc' })
+    expect(redacted).not.toBe(input)
   })
 })
