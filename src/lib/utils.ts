@@ -90,6 +90,14 @@ export function log(str: string, ...rest: unknown[]) {
   debugLog(str, ...rest)
 }
 
+const SENSITIVE_HEADER_PATTERN = /auth|cookie|api[-_]?key|token|secret|password|credential/i
+
+export function redactSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key, SENSITIVE_HEADER_PATTERN.test(key) ? '[REDACTED]' : value]),
+  )
+}
+
 type Message = any
 const MESSAGE_BLOCKED = Symbol('MessageBlocked')
 const isMessageBlocked = (value: any): value is typeof MESSAGE_BLOCKED => value === MESSAGE_BLOCKED
@@ -940,7 +948,7 @@ export async function parseCommandLineArgs(args: string[], usage: string) {
   }
 
   if (Object.keys(headers).length > 0) {
-    log(`Using custom headers: ${JSON.stringify(headers)}`)
+    log(`Using custom headers: ${JSON.stringify(redactSensitiveHeaders(headers))}`)
   }
   // Replace environment variables in headers
   // example `Authorization: Bearer ${TOKEN}` will read process.env.TOKEN
