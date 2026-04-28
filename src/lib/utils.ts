@@ -659,13 +659,19 @@ export function setupOAuthCallbackServerWithLongPoll(options: OAuthCallbackServe
   })
 
   const waitForAuthCode = (): Promise<string> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (authCode) {
         resolve(authCode)
         return
       }
 
+      const timeoutMs = options.authTimeoutMs || 30000
+      const timeout = setTimeout(() => {
+        reject(new Error(`Authentication timed out after ${timeoutMs / 1000} seconds. Please re-run to try again.`))
+      }, timeoutMs)
+
       options.events.once('auth-code-received', (code) => {
+        clearTimeout(timeout)
         resolve(code)
       })
     })

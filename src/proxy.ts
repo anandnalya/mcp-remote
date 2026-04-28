@@ -81,15 +81,15 @@ async function runProxy(
   // Create the STDIO transport for local connections
   const localTransport = new StdioServerTransport()
 
+  // Start the OAuth callback server eagerly so it's listening before the browser opens
+  const initialAuthState = await authCoordinator.initializeAuth()
+
   // Keep track of the server instance for cleanup
-  let server: any = null
+  let server: any = initialAuthState.server
 
   // Define an auth initializer function
   const authInitializer = async () => {
     const authState = await authCoordinator.initializeAuth()
-
-    // Store server in outer scope for cleanup
-    server = authState.server
 
     // If auth was completed by another instance, just log that we'll use the auth from disk
     if (authState.skipBrowserAuth) {
