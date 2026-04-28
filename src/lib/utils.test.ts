@@ -1122,6 +1122,18 @@ describe('setupOAuthCallbackServerWithLongPoll', () => {
     expect(server).toBeDefined()
     expect(typeof result.waitForAuthCode).toBe('function')
   })
+
+  it('should reject with a timeout error when no auth code is received within authTimeoutMs', async () => {
+    const result = setupOAuthCallbackServerWithLongPoll({
+      port: 0,
+      path: '/oauth/callback',
+      events,
+      authTimeoutMs: 100,
+    })
+    server = result.server
+
+    await expect(result.waitForAuthCode()).rejects.toThrow(/timed out/i)
+  }, 1000)
 })
 
 describe('Feature: Server URL Hash Generation', () => {
