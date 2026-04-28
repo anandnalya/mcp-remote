@@ -85,21 +85,27 @@ export async function isLockValid(lockData: LockfileData): Promise<boolean> {
 /**
  * Waits for authentication from another server instance
  * @param port The port to connect to
- * @returns True if authentication completed successfully, false otherwise
+ * @param timeoutMs How long to wait before giving up
+ * @returns True if authentication completed successfully, false if timed out or failed
  */
-export async function waitForAuthentication(port: number): Promise<boolean> {
+export async function waitForAuthentication(port: number, timeoutMs: number = 30000): Promise<boolean> {
   log(`Waiting for authentication from the server on port ${port}...`)
+  const deadline = Date.now() + timeoutMs
 
   try {
     let attempts = 0
-    while (true) {
+    while (Date.now() < deadline) {
       attempts++
       const url = `http://127.0.0.1:${port}/wait-for-auth`
       log(`Querying: ${url}`)
       debugLog(`Poll attempt ${attempts}`)
 
       try {
-        const response = await fetch(url, { dispatcher: directAgent })
+        const remaining = deadline - Date.now()
+        const response = await fetch(url, {
+          dispatcher: directAgent,
+          signal: AbortSignal.timeout(Math.min(remaining, 5000)),
+        })
         debugLog(`Poll response status: ${response.status}`)
         // Drain response body to release the connection back to the pool
         await response.text()
@@ -112,7 +118,7 @@ export async function waitForAuthentication(port: number): Promise<boolean> {
           // Continue polling
           log(`Authentication still in progress`)
           debugLog(`Will retry in 1s`)
-          await new Promise((resolve) => setTimeout(resolve, 1000))
+          await new Promise((resolve) => setTimeout(resolve, Math.min(1000, deadline - Date.now())))
         } else {
           log(`Unexpected response status: ${response.status}`)
           return false
@@ -120,9 +126,12 @@ export async function waitForAuthentication(port: number): Promise<boolean> {
       } catch (fetchError) {
         debugLog(`Fetch error during poll`, fetchError)
         // If we can't connect, we'll try again after a delay
-        await new Promise((resolve) => setTimeout(resolve, 2000))
+        await new Promise((resolve) => setTimeout(resolve, Math.min(2000, deadline - Date.now())))
       }
     }
+
+    log(`Timed out waiting for authentication after ${timeoutMs}ms`)
+    return false
   } catch (error) {
     log(`Error waiting for authentication: ${(error as Error).message}`)
     debugLog(`Error waiting for authentication`, error)
@@ -195,7 +204,7 @@ export async function coordinateAuth(
     try {
       // Try to wait for the authentication to complete
       debugLog('Waiting for authentication from other instance')
-      const authCompleted = await waitForAuthentication(lockData.port)
+      const authCompleted = await waitForAuthentication(lockData.port, authTimeoutMs)
 
       if (authCompleted) {
         log('Authentication completed by another instance. Using tokens from disk')
@@ -219,6 +228,14 @@ export async function coordinateAuth(
         }
       } else {
         log('Taking over authentication process...')
+        // Kill the stale process so we can reclaim its port
+        try {
+          process.kill(lockData.pid, 'SIGTERM')
+          debugLog(`Sent SIGTERM to stale auth process ${lockData.pid}`)
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        } catch {
+          debugLog(`Could not signal stale process ${lockData.pid} — may have already exited`)
+        }
       }
     } catch (error) {
       log(`Error waiting for authentication: ${error}`)

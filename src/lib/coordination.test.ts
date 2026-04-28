@@ -18,6 +18,19 @@ function startCoordinationServer(): Promise<{ server: Server; port: number }> {
   })
 }
 
+function startStuckCoordinationServer(): Promise<{ server: Server; port: number }> {
+  const app = express()
+  app.get('/wait-for-auth', (_req, res) => {
+    res.status(202).send('in progress')
+  })
+  return new Promise((resolve) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as AddressInfo).port
+      resolve({ server, port })
+    })
+  })
+}
+
 function setBrokenGlobalDispatcher(): Agent {
   const brokenAgent = new Agent({
     connect: (_opts: buildConnector.Options, callback: buildConnector.Callback) => {
@@ -62,4 +75,21 @@ describe('coordination fetches bypass global dispatcher', () => {
 
     expect(result).toBe(true)
   })
+})
+
+describe('waitForAuthentication timeout', () => {
+  let server: Server | undefined
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()))
+  })
+
+  it('returns false after timeoutMs when auth never completes', async () => {
+    const started = await startStuckCoordinationServer()
+    server = started.server
+
+    const result = await waitForAuthentication(started.port, 200)
+
+    expect(result).toBe(false)
+  }, 1000)
 })
