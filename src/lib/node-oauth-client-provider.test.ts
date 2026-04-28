@@ -22,6 +22,8 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
   let mockReadJsonFile: any
   let mockWriteJsonFile: any
   let mockDeleteConfigFile: any
+  let mockReadTextFileOptional: any
+  let mockWriteTextFile: any
 
   const defaultOptions: OAuthProviderOptions = {
     serverUrl: 'https://example.com',
@@ -34,10 +36,14 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
     mockReadJsonFile = vi.mocked(mcpAuthConfig.readJsonFile)
     mockWriteJsonFile = vi.mocked(mcpAuthConfig.writeJsonFile)
     mockDeleteConfigFile = vi.mocked(mcpAuthConfig.deleteConfigFile)
+    mockReadTextFileOptional = vi.mocked(mcpAuthConfig.readTextFileOptional)
+    mockWriteTextFile = vi.mocked(mcpAuthConfig.writeTextFile)
 
     mockReadJsonFile.mockResolvedValue(undefined)
     mockWriteJsonFile.mockResolvedValue(undefined)
     mockDeleteConfigFile.mockResolvedValue(undefined)
+    mockReadTextFileOptional.mockResolvedValue(undefined)
+    mockWriteTextFile.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -300,6 +306,192 @@ describe('NodeOAuthClientProvider - OAuth Scope Handling', () => {
       const clientMetadata = provider.clientMetadata
       // Empty scope should fallback to default
       expect(clientMetadata.scope).toBe('openid email profile')
+    })
+  })
+
+  describe('token expiry tracking', () => {
+    const NOW = 1_700_000_000_000
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('should compute remaining TTL by subtracting elapsed time', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+      const savedAt = NOW - 600_000 // 600 seconds ago
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce(String(savedAt))
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3000)
+    })
+
+    it('should clamp expires_in to 0 when token is fully expired', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+      const savedAt = NOW - 7_200_000 // 2 hours ago
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce(String(savedAt))
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(0)
+    })
+
+    it('should preserve original expires_in for legacy tokens without timestamp file', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'legacy-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'legacy-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce(undefined)
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
+
+    it('should not read timestamp file when expires_in is undefined', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        refresh_token: 'test-refresh-token',
+      })
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBeUndefined()
+      expect(mockReadTextFileOptional).not.toHaveBeenCalled()
+    })
+
+    it('should write both tokens.json and tokens_saved_at.txt on save', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+      const tokensToSave = {
+        access_token: 'new-access-token',
+        token_type: 'bearer' as const,
+        expires_in: 3600,
+        refresh_token: 'new-refresh-token',
+      }
+
+      await provider.saveTokens(tokensToSave)
+
+      expect(mockWriteJsonFile).toHaveBeenCalledWith('test-hash', 'tokens.json', tokensToSave)
+      expect(mockWriteTextFile).toHaveBeenCalledWith('test-hash', 'tokens_saved_at.txt', String(NOW))
+    })
+
+    it('should delete tokens_saved_at.txt when invalidating tokens', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      await provider.invalidateCredentials('tokens')
+
+      expect(mockDeleteConfigFile).toHaveBeenCalledWith('test-hash', 'tokens.json')
+      expect(mockDeleteConfigFile).toHaveBeenCalledWith('test-hash', 'tokens_saved_at.txt')
+    })
+
+    it('should delete tokens_saved_at.txt when invalidating all credentials', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      await provider.invalidateCredentials('all')
+
+      expect(mockDeleteConfigFile).toHaveBeenCalledWith('test-hash', 'tokens_saved_at.txt')
+      expect(mockDeleteConfigFile).toHaveBeenCalledWith('test-hash', 'tokens.json')
+      expect(mockDeleteConfigFile).toHaveBeenCalledWith('test-hash', 'client_info.json')
+      expect(mockDeleteConfigFile).toHaveBeenCalledWith('test-hash', 'code_verifier.txt')
+    })
+
+    it('should cap remaining time at original expires_in when clock skew causes negative elapsed', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+      const savedAt = NOW + 60_000 // savedAt in the future (clock skew)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce(String(savedAt))
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
+
+    it('should preserve original expires_in when timestamp file contains empty string', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce('')
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
+
+    it('should preserve original expires_in when timestamp file contains non-numeric content', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockResolvedValueOnce('not-a-number')
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
+    })
+
+    it('should preserve original expires_in when readTextFileOptional throws', async () => {
+      provider = new NodeOAuthClientProvider(defaultOptions)
+
+      mockReadJsonFile.mockResolvedValueOnce({
+        access_token: 'test-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'test-refresh-token',
+      })
+      mockReadTextFileOptional.mockRejectedValueOnce(new Error('permission denied'))
+
+      const tokens = await provider.tokens()
+
+      expect(tokens).toBeDefined()
+      expect(tokens!.expires_in).toBe(3600)
     })
   })
 })

@@ -1,7 +1,7 @@
 import path from 'path'
 import os from 'os'
 import fs from 'fs/promises'
-import { log, MCP_REMOTE_VERSION } from './utils'
+import { log, debugLog, MCP_REMOTE_VERSION } from './utils'
 
 /**
  * MCP Remote Authentication Configuration
@@ -17,6 +17,8 @@ import { log, MCP_REMOTE_VERSION } from './utils'
  *   - Format: OAuthClientInformation object with client_id and other registration details
  * - {server_hash}_tokens.json: Contains OAuth access and refresh tokens
  *   - Format: OAuthTokens object with access_token, refresh_token, and expiration information
+ * - {server_hash}_tokens_saved_at.txt: Timestamp (ms since epoch) when tokens were persisted
+ *   - Used to recompute remaining expires_in across process restarts
  * - {server_hash}_code_verifier.txt: Contains the PKCE code verifier for the current OAuth flow
  *   - Format: Plain text string used for PKCE verification
  *
@@ -185,6 +187,24 @@ export async function readTextFile(serverUrlHash: string, filename: string, erro
     return await fs.readFile(filePath, 'utf-8')
   } catch (error) {
     throw new Error(errorMessage || `Error reading ${filename}`)
+  }
+}
+
+/**
+ * Reads a text file, returning undefined if it doesn't exist.
+ * Only suppresses ENOENT; other I/O errors are logged in debug mode and re-thrown.
+ */
+export async function readTextFileOptional(serverUrlHash: string, filename: string): Promise<string | undefined> {
+  try {
+    await ensureConfigDir()
+    const filePath = getConfigFilePath(serverUrlHash, filename)
+    return await fs.readFile(filePath, 'utf-8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    debugLog(`Error reading optional file ${filename}:`, error)
+    throw error
   }
 }
 
