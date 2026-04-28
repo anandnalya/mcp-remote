@@ -36,18 +36,24 @@
     "open": "^10.1.0",
     "socks": "^2.8.7",
     "strict-url-sanitise": "^0.0.1",
-    "undici": "^7.12.0"
+    "undici": "^7.24.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "qs@<6.14.2": ">=6.14.2",
+      "express@4>path-to-regexp": "0.1.13"
+    }
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.3",
-    "zod": "^4.0.0",
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.13.10",
-    "prettier": "^3.5.3",
-    "tsup": "^8.4.0",
-    "tsx": "^4.19.3",
-    "typescript": "^5.8.2",
-    "vitest": "^3.2.3"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.19.17",
+    "prettier": "^3.8.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "zod": "^4.3.6"
   },
   "tsup": {
     "entry": [
