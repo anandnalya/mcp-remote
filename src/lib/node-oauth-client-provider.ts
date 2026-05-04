@@ -191,29 +191,27 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
    */
   async tokens(): Promise<OAuthTokens | undefined> {
     debugLog('Reading OAuth tokens')
-    debugLog('Token request stack trace:', new Error().stack)
 
     const tokens = await readJsonFile<OAuthTokens>(this.serverUrlHash, 'tokens.json', OAuthTokensSchema)
 
     if (tokens) {
-      const timeLeft = tokens.expires_in || 0
-
-      // Alert if expires_in is invalid
-      if (typeof tokens.expires_in !== 'number' || tokens.expires_in < 0) {
-        debugLog('⚠️ WARNING: Invalid expires_in detected while reading tokens ⚠️', {
-          expiresIn: tokens.expires_in,
-          tokenObject: JSON.stringify(tokens),
-          stack: new Error('Invalid expires_in value').stack,
-        })
+      // expires_in may be stored as an absolute Unix timestamp (values > 1e9) from saveTokens().
+      // Convert back to remaining seconds. Values <= 1e9 are old raw-duration format — treat as expired.
+      if (typeof tokens.expires_in === 'number') {
+        if (tokens.expires_in > 1_000_000_000) {
+          tokens.expires_in = Math.max(0, tokens.expires_in - Math.floor(Date.now() / 1000))
+        } else {
+          tokens.expires_in = 0
+        }
       }
 
+      const timeLeft = tokens.expires_in ?? 0
       debugLog('Token result:', {
         found: true,
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
         expiresIn: `${timeLeft} seconds`,
         isExpired: timeLeft <= 0,
-        expiresInValue: tokens.expires_in,
       })
     } else {
       debugLog('Token result: Not found')
@@ -227,25 +225,87 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
    * @param tokens The tokens to save
    */
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    const timeLeft = tokens.expires_in || 0
-
-    // Alert if expires_in is invalid
-    if (typeof tokens.expires_in !== 'number' || tokens.expires_in < 0) {
-      debugLog('⚠️ WARNING: Invalid expires_in detected in tokens ⚠️', {
-        expiresIn: tokens.expires_in,
-        tokenObject: JSON.stringify(tokens),
-        stack: new Error('Invalid expires_in value').stack,
-      })
-    }
+    // Store expires_in as an absolute Unix timestamp so the value remains meaningful after
+    // the process restarts. tokens() converts it back to remaining seconds on read.
+    const expiresAt =
+      typeof tokens.expires_in === 'number' && tokens.expires_in > 0
+        ? Math.floor(Date.now() / 1000) + tokens.expires_in
+        : undefined
 
     debugLog('Saving tokens', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
-      expiresIn: `${timeLeft} seconds`,
-      expiresInValue: tokens.expires_in,
+      expiresIn: `${tokens.expires_in ?? 0} seconds`,
+      expiresAt,
     })
 
-    await writeJsonFile(this.serverUrlHash, 'tokens.json', tokens)
+    await writeJsonFile(this.serverUrlHash, 'tokens.json', { ...tokens, expires_in: expiresAt })
+  }
+
+  /**
+   * Proactively refreshes expired tokens using the stored refresh_token, without waiting
+   * for the server to return a 401. Returns true if a refresh was performed, false if the
+   * tokens are still valid or there's nothing to refresh.
+   *
+   * We issue the token request directly rather than using the SDK's refreshAuthorization()
+   * because some servers return `null` for optional fields (e.g. refresh_token: null).
+   * The SDK's OAuthTokensSchema rejects null values, so we sanitize them before parsing.
+   */
+  async proactiveRefresh(): Promise<boolean> {
+    const tokens = await this.tokens()
+    if (!tokens?.refresh_token || (tokens.expires_in ?? 1) > 0) {
+      return false
+    }
+
+    debugLog('Tokens are expired, attempting proactive refresh')
+
+    const metadata = await this.getAuthorizationServerMetadata()
+    if (!metadata?.issuer) {
+      debugLog('Proactive refresh skipped: auth server issuer not available')
+      return false
+    }
+
+    const clientInfo = await this.clientInformation()
+    if (!clientInfo) {
+      debugLog('Proactive refresh skipped: client information not available')
+      return false
+    }
+
+    // Use token_endpoint from metadata if present; otherwise fall back to /token
+    // relative to issuer (same fallback the SDK uses internally).
+    const tokenUrl = metadata.token_endpoint ? new URL(metadata.token_endpoint) : new URL('/token', metadata.issuer)
+
+    const params = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+      client_id: clientInfo.client_id,
+    })
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: params,
+    })
+
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(`Token refresh failed (${response.status}): ${body}`)
+    }
+
+    const rawBody = (await response.json()) as Record<string, unknown>
+
+    // Strip null values before parsing: some servers return null for optional fields
+    // (e.g. refresh_token: null) but OAuthTokensSchema only accepts string | undefined.
+    // Preserve the original refresh_token as fallback when the server doesn't return a new one.
+    const sanitized = {
+      refresh_token: tokens.refresh_token,
+      ...Object.fromEntries(Object.entries(rawBody).filter(([, v]) => v !== null)),
+    }
+
+    const newTokens = OAuthTokensSchema.parse(sanitized)
+    await this.saveTokens(newTokens)
+    debugLog('Proactive token refresh succeeded')
+    return true
   }
 
   /**

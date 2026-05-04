@@ -422,6 +422,24 @@ export async function connectToRemoteServer(
   recursionReasons: Set<string> = new Set(),
 ): Promise<Transport> {
   log(`[${pid}] Connecting to remote server: ${serverUrl}`)
+
+  // On the first connection attempt (not a recursive retry), proactively refresh
+  // expired tokens so we don't send a stale access token to the remote server.
+  // Some servers return HTTP 500 instead of 401 for expired tokens, which prevents
+  // the SDK's reactive refresh from triggering.
+  if (recursionReasons.size === 0 && typeof (authProvider as any).proactiveRefresh === 'function') {
+    try {
+      const refreshed = await (authProvider as any).proactiveRefresh()
+      if (refreshed) {
+        log('Proactively refreshed expired OAuth tokens before connecting')
+      }
+    } catch (error) {
+      log(`Could not proactively refresh OAuth tokens: ${(error as Error).message}`)
+      log('You may need to re-authenticate. Delete the stored tokens and try again.')
+      debugLog('Proactive token refresh error', error)
+    }
+  }
+
   const url = new URL(serverUrl)
 
   // Create transport with eventSourceInit to pass Authorization header if present
