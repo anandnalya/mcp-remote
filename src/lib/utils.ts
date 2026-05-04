@@ -210,7 +210,23 @@ export function mcpProxy({
       debugLog('Initialize message with modified client info', { clientInfo })
     }
 
-    transportToServer.send(message).catch(onServerError)
+    const requestId = message.id
+    transportToServer.send(message).catch((error: Error) => {
+      onServerError(error)
+      // For requests (not notifications), send a JSON-RPC error response back to the
+      // client so it doesn't hang waiting for a response that will never arrive.
+      if (requestId !== undefined) {
+        const errorResponse = {
+          jsonrpc: '2.0' as const,
+          id: requestId,
+          error: {
+            code: -32603,
+            message: error.message || 'Remote server error',
+          },
+        }
+        transportToClient.send(errorResponse).catch(onClientError)
+      }
+    })
   }
 
   transportToServer.onmessage = (_message) => {
