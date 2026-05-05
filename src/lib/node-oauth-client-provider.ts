@@ -7,7 +7,8 @@ import {
   OAuthTokensSchema,
 } from '@modelcontextprotocol/sdk/shared/auth.js'
 import type { OAuthProviderOptions, StaticOAuthClientMetadata } from './types'
-import { readJsonFile, writeJsonFile, readTextFile, writeTextFile, deleteConfigFile } from './mcp-auth-config'
+import { readJsonFile, writeJsonFile, readTextFile, writeTextFile, deleteConfigFile, getConfigFilePath } from './mcp-auth-config'
+import { stat } from 'node:fs/promises'
 import { StaticOAuthClientInformationFull } from './types'
 import { log, debugLog, MCP_REMOTE_VERSION } from './utils'
 import { sanitizeUrl } from 'strict-url-sanitise'
@@ -191,27 +192,41 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
    */
   async tokens(): Promise<OAuthTokens | undefined> {
     debugLog('Reading OAuth tokens')
+    debugLog('Token request stack trace:', new Error().stack)
 
     const tokens = await readJsonFile<OAuthTokens>(this.serverUrlHash, 'tokens.json', OAuthTokensSchema)
 
     if (tokens) {
-      // expires_in may be stored as an absolute Unix timestamp (values > 1e9) from saveTokens().
-      // Convert back to remaining seconds. Values <= 1e9 are old raw-duration format — treat as expired.
+      const timeLeft = tokens.expires_in || 0
+
+      // Alert if expires_in is invalid
+      if (typeof tokens.expires_in !== 'number' || tokens.expires_in < 0) {
+        debugLog('⚠️ WARNING: Invalid expires_in detected while reading tokens ⚠️', {
+          expiresIn: tokens.expires_in,
+          tokenObject: JSON.stringify(tokens),
+          stack: new Error('Invalid expires_in value').stack,
+        })
+      }
+
       if (typeof tokens.expires_in === 'number') {
-        if (tokens.expires_in > 1_000_000_000) {
-          tokens.expires_in = Math.max(0, tokens.expires_in - Math.floor(Date.now() / 1000))
-        } else {
-          tokens.expires_in = 0
+        // Use the token file's mtime to compute how much of expires_in has elapsed.
+        try {
+          const filePath = getConfigFilePath(this.serverUrlHash, 'tokens.json')
+          const { mtimeMs } = await stat(filePath)
+          const elapsedSeconds = Math.floor((Date.now() - mtimeMs) / 1000)
+          tokens.expires_in = Math.max(0, tokens.expires_in - elapsedSeconds)
+        } catch {
+          // If stat fails, leave expires_in unchanged
         }
       }
 
-      const timeLeft = tokens.expires_in ?? 0
       debugLog('Token result:', {
         found: true,
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
         expiresIn: `${timeLeft} seconds`,
         isExpired: timeLeft <= 0,
+        expiresInValue: tokens.expires_in,
       })
     } else {
       debugLog('Token result: Not found')
@@ -225,21 +240,25 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
    * @param tokens The tokens to save
    */
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    // Store expires_in as an absolute Unix timestamp so the value remains meaningful after
-    // the process restarts. tokens() converts it back to remaining seconds on read.
-    const expiresAt =
-      typeof tokens.expires_in === 'number' && tokens.expires_in > 0
-        ? Math.floor(Date.now() / 1000) + tokens.expires_in
-        : undefined
+    const timeLeft = tokens.expires_in || 0
+
+    // Alert if expires_in is invalid
+    if (typeof tokens.expires_in !== 'number' || tokens.expires_in < 0) {
+      debugLog('⚠️ WARNING: Invalid expires_in detected in tokens ⚠️', {
+        expiresIn: tokens.expires_in,
+        tokenObject: JSON.stringify(tokens),
+        stack: new Error('Invalid expires_in value').stack,
+      })
+    }
 
     debugLog('Saving tokens', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
-      expiresIn: `${tokens.expires_in ?? 0} seconds`,
-      expiresAt,
+      expiresIn: `${timeLeft} seconds`,
+      expiresInValue: tokens.expires_in,
     })
 
-    await writeJsonFile(this.serverUrlHash, 'tokens.json', { ...tokens, expires_in: expiresAt })
+    await writeJsonFile(this.serverUrlHash, 'tokens.json', tokens)
   }
 
   /**
