@@ -7,7 +7,8 @@ import {
   OAuthTokensSchema,
 } from '@modelcontextprotocol/sdk/shared/auth.js'
 import type { OAuthProviderOptions, StaticOAuthClientMetadata } from './types'
-import { readJsonFile, writeJsonFile, readTextFile, writeTextFile, deleteConfigFile } from './mcp-auth-config'
+import { readJsonFile, writeJsonFile, readTextFile, writeTextFile, deleteConfigFile, getConfigFilePath } from './mcp-auth-config'
+import { stat } from 'node:fs/promises'
 import { StaticOAuthClientInformationFull } from './types'
 import { log, debugLog, MCP_REMOTE_VERSION } from './utils'
 import { sanitizeUrl } from 'strict-url-sanitise'
@@ -207,6 +208,18 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
         })
       }
 
+      if (typeof tokens.expires_in === 'number') {
+        // Use the token file's mtime to compute how much of expires_in has elapsed.
+        try {
+          const filePath = getConfigFilePath(this.serverUrlHash, 'tokens.json')
+          const { mtimeMs } = await stat(filePath)
+          const elapsedSeconds = Math.floor((Date.now() - mtimeMs) / 1000)
+          tokens.expires_in = Math.max(0, tokens.expires_in - elapsedSeconds)
+        } catch {
+          // If stat fails, leave expires_in unchanged
+        }
+      }
+
       debugLog('Token result:', {
         found: true,
         hasAccessToken: !!tokens.access_token,
@@ -246,6 +259,72 @@ export class NodeOAuthClientProvider implements OAuthClientProvider {
     })
 
     await writeJsonFile(this.serverUrlHash, 'tokens.json', tokens)
+  }
+
+  /**
+   * Proactively refreshes expired tokens using the stored refresh_token, without waiting
+   * for the server to return a 401. Returns true if a refresh was performed, false if the
+   * tokens are still valid or there's nothing to refresh.
+   *
+   * We issue the token request directly rather than using the SDK's refreshAuthorization()
+   * because some servers return `null` for optional fields (e.g. refresh_token: null).
+   * The SDK's OAuthTokensSchema rejects null values, so we sanitize them before parsing.
+   */
+  async proactiveRefresh(): Promise<boolean> {
+    const tokens = await this.tokens()
+    if (!tokens?.refresh_token || (tokens.expires_in ?? 1) > 0) {
+      return false
+    }
+
+    debugLog('Tokens are expired, attempting proactive refresh')
+
+    const metadata = await this.getAuthorizationServerMetadata()
+    if (!metadata?.issuer) {
+      debugLog('Proactive refresh skipped: auth server issuer not available')
+      return false
+    }
+
+    const clientInfo = await this.clientInformation()
+    if (!clientInfo) {
+      debugLog('Proactive refresh skipped: client information not available')
+      return false
+    }
+
+    // Use token_endpoint from metadata if present; otherwise fall back to /token
+    // relative to issuer (same fallback the SDK uses internally).
+    const tokenUrl = metadata.token_endpoint ? new URL(metadata.token_endpoint) : new URL('/token', metadata.issuer)
+
+    const params = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+      client_id: clientInfo.client_id,
+    })
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: params,
+    })
+
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(`Token refresh failed (${response.status}): ${body}`)
+    }
+
+    const rawBody = (await response.json()) as Record<string, unknown>
+
+    // Strip null values before parsing: some servers return null for optional fields
+    // (e.g. refresh_token: null) but OAuthTokensSchema only accepts string | undefined.
+    // Preserve the original refresh_token as fallback when the server doesn't return a new one.
+    const sanitized = {
+      refresh_token: tokens.refresh_token,
+      ...Object.fromEntries(Object.entries(rawBody).filter(([, v]) => v !== null)),
+    }
+
+    const newTokens = OAuthTokensSchema.parse(sanitized)
+    await this.saveTokens(newTokens)
+    debugLog('Proactive token refresh succeeded')
+    return true
   }
 
   /**
